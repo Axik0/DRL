@@ -6,3 +6,5 @@ matplotlib==3.8.0
 numpy==1.26.1
 optuna==3.3.0
 seaborn==0.13.0
+torch==2.1.0
+torchsummary==1.5.1
