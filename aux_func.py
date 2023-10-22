@@ -11,3 +11,5 @@ def rr(env):
 def act(action_id: int, env):
     """filters unnecessary output"""
     return env.step(action_id)[:3]
+
+
