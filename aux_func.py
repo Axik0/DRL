@@ -1,3 +1,6 @@
+"""contains base agent class, annealing rules and env hacks,
+this content has to be imported and used in a Jupyter notebook"""
+
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 import seaborn as sns
@@ -114,3 +117,48 @@ class RandAgent:
         ax = sns.heatmap(self.policy, **concise_actions, cbar=False)
         ax.set_title(label if label else 'Current policy')
         return ax
+
+
+# ANNEALING
+def lin_ann_rate(i, n_total, start=1):
+    return start * (1 - i / (n_total - 1))
+
+
+def exp_ann_rate(i, start=1, thr=0, la=2/300, drop=0):
+    """exponential decay with i --> +inf, provides descending values within range [expl_thr, start],
+        la=0.01 means ~36% left after 100 iterations, results < drop value are zeroed"""
+    result = thr + (start - thr) * np.exp(- la * i)
+    if drop:
+        if isinstance(i, np.ndarray):
+            result[result <= drop] = 0
+        elif result < drop:
+            result = 0
+    return result
+
+
+def sgm_ann_rate(i, mid, start=1, alpha=1e-2, drop=0):
+    """symmetric sigmoidal decay within [0, 2*mid-1] provides descending values within range [1-alpha, alpha],
+    results < drop value are zeroed, alpha controls the gap between function value and its asymptotes (i=1/i=0)"""
+    # establish max possible smoothness given alpha and symmetrize wrt midpoint (this form has been pre-simplified)
+    result = start * (1 + (1/alpha - 1) ** ((i - mid)/mid) )**(-1)
+    if drop:
+        if isinstance(i, np.ndarray):
+            result[result <= drop] = 0
+        elif result < drop:
+            result = 0
+    return result
+
+
+def anneal_comparison(n=500):
+    i = np.arange(n)
+    ax = sns.lineplot(lin_ann_rate(i, n), linewidth=1.2, label=f"base")
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    ax.set_title(f"Annealing rates comparison", fontsize=15)
+    ax.set_xlabel('iterations - 1')
+    [sns.lineplot(sgm_ann_rate(i, n/2, alpha=j, drop=0), linewidth=1, ax=ax, label=f"α={j:.3f}") for j in np.arange(1e-5, 1e-1, 2e-2)]
+    [sns.lineplot(exp_ann_rate(i, thr=0, la=j/n, drop=0), linewidth=1, ax=ax, label=f"λ={j/100}") for j in np.arange(2, 100, 20)]
+
+
+if __name__ == '__main__':
+    anneal_comparison(200)
+    plt.show()
