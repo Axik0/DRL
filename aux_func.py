@@ -30,7 +30,7 @@ def act(action, env):
 class RandAgent:
     """baseline agent that performs random (sample from uniform distr) actions"""
 
-    def __init__(self, env, aid_to_str, capture_path='./animations'):
+    def __init__(self, env, aid_to_str=False, capture_path='./animations'):
         self.env = env
         self.n_states = self.env.observation_space.n
         self.n_actions = self.env.action_space.n
@@ -92,8 +92,7 @@ class RandAgent:
         """captures render output and creates gif animation from frames (rgb arrays)"""
         self.rendered_frames = []
         results = self.walk(max_length, render=2)
-        # name = ENV.unwrapped.spec.id + '.gif'
-        name = 'default' + '.gif'
+        name = self.env.unwrapped.spec.id + '.gif'
         path = os.path.join(self.capture_path, name)
         imageio.mimsave(path, ims=self.rendered_frames, fps=fps)
         print(f"Trajectory with reward {sum(results['r'])} has been captured to {path}")
@@ -222,11 +221,11 @@ class SigmoidalAR(AnnealingRate):
         self.str_name = 'Sigmoidal decay'
         self.thr = thr
         self.al = al
-        self.mid = self.n_total // 2
 
     def __call__(self, i):
         # establish max possible smoothness given alpha and symmetrize wrt mid value (this form has been pre-simplified)
-        result = self.start * (1 + (1 / self.al - 1) ** ((i - self.mid) / self.mid)) ** (-1)
+        mid = self.n_total // 2
+        result = self.start * (1 + (1 / self.al - 1) ** ((i - mid) / mid)) ** (-1)
         if self.drop:
             if isinstance(i, np.ndarray):
                 result[result <= self.drop] = 0
