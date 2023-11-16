@@ -53,7 +53,8 @@ class RandAgent:
         self.capture_path = capture_path  # storage folder for animation
         self.fly = None  # method to be executed throughout a trajectory (e.g. change policy based on local MDP context)
         if self.n_actions and self.n_states:
-            self.policy = np.ones((self.n_states, self.n_actions)) / self.n_actions  # uniform policy initialisation (sa)
+            self.policy = np.ones(
+                (self.n_states, self.n_actions)) / self.n_actions  # uniform policy initialisation (sa)
 
     def act(self, state):
         """draws a random sample from current distribution on actions"""
@@ -137,7 +138,7 @@ def lin_ann_rate(i, n_total, start=1):
     return start * (1 - i / (n_total - 1))
 
 
-def exp_ann_rate(i, start=1, thr=0, la=2/300, drop=0):
+def exp_ann_rate(i, start=1, thr=0, la=2 / 300, drop=0):
     """exponential decay with i --> +inf, provides descending values within range [expl_thr, start],
         la=0.01 means ~36% left after 100 iterations, results < drop value are zeroed"""
     result = thr + (start - thr) * np.exp(- la * i)
@@ -153,7 +154,7 @@ def sgm_ann_rate(i, mid, start=1, alpha=1e-2, drop=0):
     """symmetric sigmoidal decay within [0, 2*mid-1] provides descending values within range [1-alpha, alpha],
     results < drop value are zeroed, alpha controls the gap between function value and its asymptotes (i=1/i=0)"""
     # establish max possible smoothness given alpha and symmetrize wrt midpoint (this form has been pre-simplified)
-    result = start * (1 + (1/alpha - 1) ** ((i - mid)/mid) )**(-1)
+    result = start * (1 + (1 / alpha - 1) ** ((i - mid) / mid)) ** (-1)
     if drop:
         if isinstance(i, np.ndarray):
             result[result <= drop] = 0
@@ -168,8 +169,10 @@ def anneal_comparison(n=500):
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
     ax.set_title(f"Annealing rates comparison", fontsize=15)
     ax.set_xlabel('iterations - 1')
-    [sns.lineplot(sgm_ann_rate(i, n/2, alpha=j, drop=0), linewidth=1, ax=ax, label=f"α={j:.3f}") for j in np.arange(1e-5, 1e-1, 2e-2)]
-    [sns.lineplot(exp_ann_rate(i, thr=0, la=j/n, drop=0), linewidth=1, ax=ax, label=f"λ={j/100}") for j in np.arange(2, 100, 20)]
+    [sns.lineplot(sgm_ann_rate(i, n / 2, alpha=j, drop=0), linewidth=1, ax=ax, label=f"α={j:.3f}") for j in
+     np.arange(1e-5, 1e-1, 2e-2)]
+    [sns.lineplot(exp_ann_rate(i, thr=0, la=j / n, drop=0), linewidth=1, ax=ax, label=f"λ={j / 100}") for j in
+     np.arange(2, 100, 20)]
 
 
 # auxillary functions
@@ -224,6 +227,18 @@ class ExponentialAR(AnnealingRate):
             elif result < self.drop:
                 result = 0
         return result
+
+
+class AntiExponentialAR(ExponentialAR):
+    """slow exponential rise with i --> +inf, provides ascending values within range [expl_thr, start],
+        la=0.01 means ~36% left after 100 iterations, results < drop value are zeroed"""
+
+    def __init__(self, la, n_iterations=100, end=1, drop=1e-7, thr=0):
+        super().__init__(n_iterations=n_iterations, la=la, start=end, drop=drop, thr=thr)
+        self.str_name = 'Slow exponential decay'
+
+    def __call__(self, i):
+        return 1 - super().__call__(i)
 
 
 class SigmoidalAR(AnnealingRate):
