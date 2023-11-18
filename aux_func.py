@@ -201,12 +201,27 @@ class AnnealingRate:
 class LinearAR(AnnealingRate):
     """Linear decay from start to zero"""
 
-    def __init__(self, n_iterations=100, start=1, drop=0, thr=0):
+    def __init__(self, n_iterations=100, start=1, drop=0):
         super().__init__(n_iterations=n_iterations, start=start, drop=drop)
         self.str_name = 'Linear decay'
 
     def __call__(self, i):
         return self.start * (1 - i / (self.n_total - 1))
+
+
+class SteppingAR(AnnealingRate):
+    """Stepping decay from start to zero, given by percent values of value and size"""
+    def __init__(self, n_iterations=100, start=1, drop=0, steps=((100, 20), (50, 40), (25, 20), (0, 20))):
+        super().__init__(n_iterations=n_iterations, start=start, drop=drop)
+        self.str_name = 'Stepping decay'
+        assert np.array(steps)[:, 1].sum() == 100, f'wrong steps {steps}'
+        self.stepping = []
+        for (pv, s) in steps:
+            self.stepping += [start*pv/100]*(int(n_iterations*s/100))
+        self.stepping = np.array(self.stepping)
+
+    def __call__(self, i):
+        return self.stepping[i]
 
 
 class ExponentialAR(AnnealingRate):
@@ -308,6 +323,27 @@ def sample_noise(dim=1, n_iterations=100, scale=(1, 20), show_limits=True, annea
         ax.axhline(y=min(ou), color='g', linestyle='-', linewidth=0.5)
 
 
+def varlinspace(odd_func, **lspkwargs):
+    """linspace with variable step size, takes same keyword arguments as np.linspace
+        function must be odd and monotonic, e.g. power function lambda x: x**(3)"""
+    eqd = np.linspace(**lspkwargs)
+    res_ = odd_func(eqd)
+    if np.isnan(res_).any():
+        print("wrong function choice, results contain nans")
+    elif np.isinf(res_).any():
+        print("wrong function choice, results contain infinities")
+    else:
+        med = np.median(res_, axis=0)
+        left, right = res_*(res_ < med[None, :]), res_*(res_ >= med[None, :])
+        # scale left and right parts
+        left_s, right_s = left*np.abs(np.min(eqd,axis=0)/np.min(left, axis=0)), right*np.abs(np.max(eqd, axis=0)/np.max(right, axis=0))
+        # scale could have been different and lead to non-monotonic, have to sort it again
+        res = np.sort(left_s + right_s, axis=0)
+        # sns.scatterplot(res)
+        sns.stripplot(res, jitter=1e-3, orient='h', s=6, marker="v")
+        return res
+
+
 if __name__ == '__main__':
     # anneal_comparison(200)
     # b = AnnealingRate()
@@ -315,5 +351,9 @@ if __name__ == '__main__':
     # s = SigmoidalAR(al=1e-2, n_iterations=100)
     # ex = ExponentialAR(la=1e-2, n_iterations=100)
     # ex.plot()
-    sample_noise()
+    # sample_noise()
+    st = SteppingAR()
+    st.plot()
     plt.show()
+
+
