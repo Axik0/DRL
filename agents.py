@@ -128,25 +128,8 @@ class RandAgent:
         return ax
 
     def __repr__(self):
-        return (f"Agent {self.__class__.__name__} with {'discrete' if self.n_actions else 'inf'} actions "
+        return (f"Agent {self.__class__.__name__} with {self.n_actions} actions "
                 f"and {'discrete' if self.n_states else 'inf'} states initialised")
-
-
-class CSRandAgent(RandAgent):
-    """baseline agent that performs random discrete actions (continuous environment)"""
-
-    def __init__(self, env, aid_to_str=False, capture_path='./animations'):
-        super().__init__(env=env, aid_to_str=aid_to_str, capture_path=capture_path)
-        self.n_states = None
-        self.d_states = self.env.observation_space.shape[0]
-        self.policy = None
-
-    def act(self, state):
-        action = np.random.binomial(n=1, p=0.5, size=1)
-        return action
-
-    def show_policy(self, label=None):
-        return None
 
 
 class ModelFreeAgent(RandAgent):
@@ -206,16 +189,13 @@ class ModelFreeAgent(RandAgent):
                 plt.close()  # because plt.clf() is spurious
 
 
-class CSRandAgent(RandAgent):
+class CRandAgent(RandAgent):
     """baseline agent that performs random discrete actions (continuous environment)"""
 
     def __init__(self, env, aid_to_str=False, capture_path='./animations'):
         super().__init__(env=env, aid_to_str=aid_to_str, capture_path=capture_path)
         self.n_states = None
-        try:
-            self.d_states = self.env.observation_space.shape[0]
-        except AttributeError:
-            self.d_states = None
+        self.d_states = self.env.observation_space.shape[0]
         self.policy = None
 
     def act(self, state):
@@ -226,7 +206,7 @@ class CSRandAgent(RandAgent):
         return None
 
 
-class CrossEntropyNNCAgent(CSRandAgent):
+class CrossEntropyNNCAgent(CRandAgent):
     """CrossEntropy algorithm actor, optimizes expected reward by policy, given by neural network"""
     def __init__(self, env, aid_to_str=False, capture_path='./animations', noise_fn=G_noise, hidden_d=(120, None),
                  device=DEVICE):
