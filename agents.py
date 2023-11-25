@@ -74,7 +74,7 @@ class RandAgent:
             state = new_state
             if interkwargs and self.fly:
                 try:
-                    self.fly(q6, **interkwargs)
+                    self.fly(q6, done, **interkwargs)
                 except AttributeError:
                     print("intermediary update method hasn't been defined for this class")
             # continuous visualization w/ proper interrupt
@@ -139,7 +139,7 @@ class ModelFreeAgent(RandAgent):
         super().__init__(env=env, aid_to_str=aid_to_str)
         self.stc = 0  # counts improvement steps
 
-    def gpi(self, q, eps, zero_mask=None):
+    def gi(self, q, eps, zero_mask=None):
         """epsilon-greedy policy improvement based on values of q(s,a), at each state,
         policy ~ not only take an action that maximizes given action-value function q,
         but also allow "the rest" actions happen with eps probability (shared)
@@ -155,8 +155,8 @@ class ModelFreeAgent(RandAgent):
                     np.ones(self.n_actions) - np.eye(self.n_actions))
         best_actions = np.argmax(q, axis=0)  # 1D array of 'best' actions
         # one-hot encoding of best_actions array (used to choose rows from dummy)
-        self.policy = dummy[best_actions]
         self.stc += 1
+        return dummy[best_actions]
 
     def fit(self, n_trajectories, max_length, alpha_d=0.5, gamma=0.99, eps_d=None, verbose=False):
         dh = display.display(display_id=True)
@@ -192,8 +192,8 @@ class ModelFreeAgent(RandAgent):
 class CRandAgent(RandAgent):
     """baseline agent that performs random discrete actions (continuous environment)"""
 
-    def __init__(self, env, aid_to_str=False, capture_path='./animations'):
-        super().__init__(env=env, aid_to_str=aid_to_str, capture_path=capture_path)
+    def __init__(self, env, aid_to_str=False):
+        super().__init__(env=env, aid_to_str=aid_to_str)
         self.n_states = None
         self.d_states = self.env.observation_space.shape[0]
         self.policy = None
@@ -208,9 +208,9 @@ class CRandAgent(RandAgent):
 
 class CrossEntropyNNCAgent(CRandAgent):
     """CrossEntropy algorithm actor, optimizes expected reward by policy, given by neural network"""
-    def __init__(self, env, aid_to_str=False, capture_path='./animations', noise_fn=G_noise, hidden_d=(120, None),
+    def __init__(self, env, aid_to_str=False, noise_fn=G_noise, hidden_d=(120, None),
                  device=DEVICE):
-        super().__init__(env=env, aid_to_str=aid_to_str, capture_path=capture_path)
+        super().__init__(env=env, aid_to_str=aid_to_str)
 
         self.scale = 1
         self.noise_fn = noise_fn
@@ -317,3 +317,94 @@ class CrossEntropyNNCAgent(CRandAgent):
                 dh.update(plt.gcf())
                 plt.close()  # because plt.clf() is spurious
         return avg_reward
+
+
+class SARSAAgent(ModelFreeAgent):
+    """SARSA updates at each step of every trajectory"""
+
+    def __init__(self, env, aid_to_str):
+        super().__init__(env=env, aid_to_str=aid_to_str)
+        self.Q = np.zeros_like(self.policy.T)
+        self.fly = self.sarsa_step
+
+    def sarsa_step(self, queue_6, alpha, eps, gamma):
+        """accepts a queue object, updates value-function q and policy in sarsa manner"""
+        if len(queue_6) == 6:  # sarsar
+            s, a, r, sx, ax = list(queue_6)[:5]
+            self.Q[a, s] += alpha * (r + gamma * self.Q[ax, sx] - self.Q[a, s])
+            self.policy = self.gi(self.Q, eps)
+
+
+class QLearningAgent(ModelFreeAgent):
+    """Q updates at each step of every trajectory"""
+
+    def __init__(self, env, aid_to_str):
+        super().__init__(env=env, aid_to_str=aid_to_str)
+        self.Q = np.zeros_like(self.policy.T)
+        self.fly = self.ql_step
+
+    def ql_step(self, queue_6, alpha, eps, gamma):
+        """accepts a queue object, updates value-function q and policy ~ Q-learning"""
+        if len(queue_6) == 6:  # sarsar
+            s, a, r, sx = list(queue_6)[:4]
+            self.Q[a, s] += alpha * (r + gamma * np.max(self.Q[:, sx]) - self.Q[a, s])
+            self.policy = self.gi(self.Q, eps)
+
+
+class MonteCarloAgent(ModelFreeAgent):
+    """Applies Monte-Carlo sampling of trajectories for action-value function q approximation"""
+
+    def __init__(self, env, aid_to_str):
+        super().__init__(env=env, aid_to_str=aid_to_str)
+
+    def walk_r(self, gamma, max_length):
+        """transforms standard results after tracing a route, yields
+            n (matrix a,s of visited state counts),
+            g (matrix a,s of returns)"""
+        g, n = np.zeros_like(self.policy.T), np.zeros_like(self.policy.T)
+        trajectory = super().walk(max_length=max_length)
+        R, A, S = trajectory['r'], trajectory['a'], trajectory['s']
+        # get rewards serie (summands, w/ discounting)
+        gamma_ = np.cumprod(np.concatenate((np.atleast_1d(1.), np.tile(np.array(gamma), len(R) - 1))))
+        R_discounted = gamma_ * np.array(R)
+        # get values of returns G, e.g. total reward as if we'd started at timestep t and continued MDP on this trajectory
+        G = np.array([np.sum(R_discounted[t:]) / gamma ** t for t in range(len(R_discounted))])
+        # get unique pairs from 2D array, their places and counts
+        unp, pos, cts = np.unique(np.vstack([A, S]), axis=1, return_inverse=True, return_counts=True)
+        # row vector of stacked Gt values @ matrix with (stacked as rows ~ pos) one-hot encoded unique states => row vector with sum of Gts at unique states
+        g[*unp], n[*unp] = G @ (np.eye(len(cts))[pos]), cts
+        return g, n, sum(R)
+
+    def fit(self, n_trajectories, max_length, eps_d=None, gamma=1, verbose=False):
+        """MC approach replaces expected value calculation with an empirical mean of return Gt"""
+        dh = display.display(display_id=True)
+        if eps_d is not None:
+            eps_d.n_total = n_trajectories
+        else:
+            eps_d = LinearAR(n_iterations=n_trajectories, start=1)
+        eps_rates = []
+        # np.full(shape=self.policy.T.shape, fill_value=-np.inf)
+        G, N = np.zeros_like(self.policy.T), np.zeros_like(self.policy.T)
+        for i, t in enumerate(range(n_trajectories)):
+            # MC policy evaluation to approximate Q
+            g, n, r = self.walk_r(max_length=max_length, gamma=gamma)
+            G, N = G + g, N + n
+            Q = G / (N_ := N.copy() + 1E-2 * (N == 0))  # prevent zero-division error
+
+            # decrease eps throughout the loop
+            eps = eps_d(i)
+
+            # policy improvement (non-visited sa pairs are treated different)
+            self.gpi(Q, eps=eps, zero_mask=N == 0)
+
+            # visualization
+            self.log.append(r)
+            eps_rates.append(eps)
+            if verbose:
+                # ax = self.show_policy()
+                ax = self.learning_curve(title=f"Total reward at trajectory of length < {max_length}", l_scale=False)
+                ax2 = ax.twinx()
+                ax2.tick_params(axis='y', labelcolor='blueviolet')
+                sns.lineplot(eps_rates, linewidth=0.5, ax=ax2, label="exploration, ε", color='blueviolet')
+                dh.update(plt.gcf())
+                plt.close()  # because plt.clf() is spurious
