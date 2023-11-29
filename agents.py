@@ -151,6 +151,7 @@ class ModelFreeAgent(RandAgent):
             q[zero_mask] = np.full(shape=q.shape, fill_value=0)[zero_mask]
             # q = np.ma.array(q, mask=zero_mask)
         # epsilon-greedy: let eps be ~"the rest" actions probability, split it between the all actions
+
         dummy = (1 - eps + eps / self.n_actions) * np.eye(self.n_actions) + (eps / self.n_actions) * (
                     np.ones(self.n_actions) - np.eye(self.n_actions))
         best_actions = np.argmax(q, axis=0)  # 1D array of 'best' actions
