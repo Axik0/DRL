@@ -6,13 +6,14 @@ import seaborn as sns
 import imageio
 import os
 import time
+import random
+import copy
 import numpy as np
 from IPython import display
 from collections import deque
 
 import torch
 import torch.nn as nn
-import torchsummary as summary
 import tqdm.notebook as tqdm
 
 from aux_func import LinearAR, ExponentialAR, G_noise
@@ -409,3 +410,140 @@ class MonteCarloAgent(ModelFreeAgent):
                 sns.lineplot(eps_rates, linewidth=0.5, ax=ax2, label="exploration, ε", color='blueviolet')
                 dh.update(plt.gcf())
                 plt.close()  # because plt.clf() is spurious
+
+
+class DeepQN(ModelFreeAgent, CRandAgent):
+    """
+    Models internal Q-function by neural network and Bellmann equation, acts epsilon-greedy on each trajectory
+    hard target, soft-target and double-DQN approaches are implemented
+    """
+
+    def __init__(self, env, aid_to_str, hidden_d=(80, 40), device=DEVICE):
+        super().__init__(env=env, aid_to_str=aid_to_str)
+
+        self.loss = nn.MSELoss()
+        self.device = device
+        self.model = nn.Sequential(
+            nn.Linear(in_features=self.d_states, out_features=hidden_d[0]),
+            nn.ReLU(),
+            nn.Linear(in_features=hidden_d[0], out_features=hidden_d[1]),
+            nn.ReLU(),
+            nn.Linear(hidden_d[1], self.n_actions))
+
+        self.fly = self.dq_step
+        self.temp = []  # replay buffer
+        self.frozen = self.model
+
+        self.curr_eps = None  # for internal use, current epsilon value
+        self.curr_losses = []  # for internal use, stores loss values for current trajectory
+
+    def freeze(self):
+        """freezes current model"""
+        self.frozen = copy.deepcopy(self.model)
+        self.frozen.eval()
+
+    def frozen_s(self, x, tau):
+        """soft target smoothing of a moving target model with a frozen one"""
+        return (1 - tau) * self.frozen(x).detach() + tau * self.model(x).detach()
+
+    def Q(self, states):
+        """current model of Q values (vector/matrix) for all actions from state/states"""
+        with torch.inference_mode():
+            self.model.eval()
+            if states.ndim == 1:  # for numpy array
+                states = torch.Tensor(states).unsqueeze(0).to(self.device)
+            return self.model(states).detach()
+
+    def act(self, state):
+        # use current model to get (epsilon-greedy) action distribution for next action
+        action_d = self.gi(self.Q(state).squeeze().numpy(), self.curr_eps)
+        return np.random.choice(self.n_actions, p=action_d)
+
+    def dq_step(self, queue_6, done, gamma, batch_size, optimizer, tar_iter, smoothing_tau, double):
+        """taking each step of a trajectory (as queue object), calculates value-function q ~ Q-learning"""
+        if len(queue_6) >= 4:  # sars|
+            s, a, r, sx = list(queue_6)[:4]
+            self.temp.append((s, a, r, sx))  # fill the storage
+            if done:
+                # additional xxx|sar + nan for terminal state when next action doesn't happen (but we have to retain same shape)
+                self.temp.append((*list(queue_6)[3:], np.full(self.d_states, np.nan)))
+            # training
+            if len(self.temp) >= batch_size:
+                # disjoin target modelling and new model learning
+                self.freeze()
+                self.model.train()
+                for k in tar_iter:
+                    # take batches
+                    batch = random.sample(self.temp, k=batch_size)
+                    # extract data from this batch and cast into a convenient shape, dtype and so on
+                    states, actions, rewards, next_states = map(
+                        lambda x: torch.tensor(np.stack(x), device=self.device, requires_grad=False, dtype=torch.float),
+                        zip(*batch))
+                    # apply model of Q to the elements that have valid next state only
+                    done = torch.isnan(next_states).any(axis=1)  # filter out rows with nans in last dimension
+                    Q_next = torch.zeros(states.shape[0], 1)  # pad with zeros elsewhere
+                    frozen_targets = self.frozen_s(next_states[~done, :], tau=smoothing_tau)
+                    if double:  # apply current model to the next_states but act with argmaxes of a ~frozen one (for double-DQN)
+                        Q_next[~done, :] = self.Q(next_states[~done, :])[
+                            torch.arange(frozen_targets.shape[0]), torch.argmax(frozen_targets, dim=-1)].unsqueeze(-1)
+                    else:
+                        Q_next[~done, :] = torch.max(frozen_targets, dim=-1, keepdim=True).values
+                    # process final targets as reward + gamma * max(Q at next state)
+                    Qb_d = rewards.unsqueeze(-1) + gamma * Q_next
+                    # forward pass
+                    Qa_d = self.model(states)[torch.arange(states.shape[0]), actions.int()].unsqueeze(
+                        -1)  # Q at this state and action
+                    loss = self.loss(Qa_d, Qb_d)
+                    # backward pass
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+                # save current loss value
+                self.curr_losses.append(loss.detach())
+
+    def fit(self, n_trajectories=100, max_length=50, lr=0.01, gamma=0.99, batch_size=4, eps_d=None, verbose=None,
+            n_hard=1, t_soft=0, dd=False):
+        """
+        This algorithm performs (model of Q) learning throughout each of n_trajectories (w/ length <= max_length)
+            lr defines learning rate of built-in Adam optimizer
+            verbose>0 sets up a period of learning process rendering
+        NB: .fit internally uses .act method of child class(this), doesn't inherit parental
+        """
+        assert n_hard >= 1, f'incorrect {n_hard} amount of hard target model iterations'
+
+        self.model.to(self.device)
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        iterations_pbar = tqdm.trange(n_trajectories, position=0, leave=True, colour="#a2d2ff")
+        dh = display.display(display_id=True)
+        # use linear annealing rule default or customize given one
+        if eps_d is not None:
+            eps_d.n_total = n_trajectories
+        else:
+            eps_d = LinearAR(n_iterations=n_trajectories, start=1)
+        eps_log, loss_log = [], []
+        for i in iterations_pbar:
+            # obtain epsilon
+            self.curr_eps = eps_d(i)
+            # trace a route
+            # tar_pbar = tqdm.trange(n_hard, position=1, leave=False, colour="#ffc8dd")
+            result = self.walk(max_length=max_length, gamma=gamma, batch_size=batch_size, optimizer=optimizer,
+                               tar_iter=range(n_hard), smoothing_tau=t_soft, double=dd)
+            # logging
+            res_reward = np.sum(result['r'])
+            eps_log.append(self.curr_eps)
+            self.log.append(res_reward)
+            if self.curr_losses:
+                loss_log.append(torch.mean(torch.stack(self.curr_losses)).item())
+                iterations_pbar.set_postfix_str(f'curr reward: {res_reward.item():.0f}, loss: {loss_log[-1]:.2f}',
+                                                refresh=True)
+            # visualization (plotting starts after at least 1 iteration)
+            if verbose and i > 0 and (i + 1) % verbose == 0:
+                # print(f"iteration {i + 1}, mean total reward: {avg_reward}")
+                ax = self.learning_curve(title="Rewards")
+                ax2 = ax.twinx()
+                ax2.tick_params(axis='y', labelcolor='slateblue')
+                # sns.lineplot(eps_log, linewidth=0.5, ax=ax2, label="exploration, ε", color='slateblue')
+                sns.lineplot(loss_log, linewidth=0.5, ax=ax2, label="loss", color='violet')
+                dh.update(plt.gcf())
+                plt.close()  # because plt.clf() is spurious
+        return res_reward
