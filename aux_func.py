@@ -65,12 +65,13 @@ class AnnealingRate:
         self.n_total = n_iterations
 
     def __call__(self, i):
-        return [self.start] * self.n_total
+        return ([self.start] * self.n_total)[i]
 
     def plot(self, n_iterations=100, ax=None):
         if hasattr(self, "__call__") and callable(self.__call__):
-            i = np.arange(n_iterations)
-            ax = sns.lineplot(self.__call__(i), linewidth=1, ax=ax)
+            idx = np.arange(n_iterations)
+            graph = [self.__call__(i) for i in idx]
+            ax = sns.lineplot(graph, linewidth=1, ax=ax)
             ax.xaxis.set_major_locator(MaxNLocator(integer=True))
             ax.set_title(f"{self.str_name}", fontsize=15)
             ax.set_xlabel('iterations - 1')
