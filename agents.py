@@ -73,11 +73,12 @@ class RandAgent:
             # add (append) current step (sar) to queue
             q6.extend((state, action, reward))
             state = new_state
+            terminated = done or i == max_length - 1  # take last iteration into account
             if interkwargs and self.fly:
                 try:
-                    self.fly(q6, done, **interkwargs)
+                    self.fly(q6, terminated, new_state, **interkwargs)
                 except AttributeError:
-                    print("intermediary update method hasn't been defined for this class")
+                    print("intermediary update or another method hasn't been defined for this class")
             # continuous visualization w/ proper interrupt
             if render:
                 try:
